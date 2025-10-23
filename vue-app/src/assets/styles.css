@@ -1,0 +1,49 @@
+:root {
+    --bg: #0f1117;
+    --panel: #151924;
+    --card: #1b2130;
+    --ink: #e6e8ef;
+    --muted: #9aa3b2;
+    --ok: #3fb950;
+    --bad: #f85149;
+    --line: #334;
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.4 system-ui, Segoe UI, Roboto, Arial
+}
+
+button,
+input,
+select {
+    background: #222a3b;
+    border: 1px solid #2a3347;
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 8px;
+    outline: none
+}
+
+button:hover {
+    filter: brightness(1.05)
+}
+
+button.danger {
+    background: #3a2226;
+    border-color: #5a2a31
+}
+
+button.link {
+    border: none;
+    background: transparent;
+    padding: 0;
+    color: #8ab4ff;
+    cursor: pointer
+}

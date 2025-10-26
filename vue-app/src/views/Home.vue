@@ -965,7 +965,9 @@ function closeResultsModal() {
         <div class="bottom-controls">
           <button class="reset-view" @click="zoomOut" title="Отдалить">-</button>
           <button class="reset-view" @click="zoomIn" title="Приблизить">+</button>
-          <button class="reset-view" @click="resetView" title="Вернуть к центру">центр</button>
+          <button class="reset-view" @click="resetView" title="Вернуть в исходное положение">
+            <i class="mdi mdi-home"></i>
+          </button>
         </div>
       </main>
   

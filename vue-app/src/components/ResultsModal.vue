@@ -83,7 +83,6 @@
                   <th>Стержень</th>
                   <th>Nx (0) [qL]</th>
                   <th>Nx (Li) [qL]</th>
-                  <th>Деформация ε</th>
                 </tr>
               </thead>
               <tbody>
@@ -91,7 +90,6 @@
                   <td>{{ force.rodNumber }}</td>
                   <td>{{ formatNumber(force.forceAtStart) }}</td>
                   <td>{{ formatNumber(force.forceAtEnd) }}</td>
-                  <td>{{ formatNumber(force.strain) }}</td>
                 </tr>
               </tbody>
             </table>
@@ -229,25 +227,19 @@
             </div>
             <div v-if="isValidCoordinate && sectionResults" class="section-results">
             <div class="result-item">
-              <span class="result-label">Перемещение Ux:</span>
-              <span class="result-value">{{ formatNumber(sectionResults.displacement) }} м</span>
-            </div>
-            <div class="result-item">
-              <span class="result-label">Деформация ε:</span>
-              <span class="result-value">{{ formatNumber(sectionResults.strain) }}</span>
+              <span class="result-label">Продольная сила Nx:</span>
+              <span class="result-value">{{ formatNumber(sectionResults.force) }} Н</span>
             </div>
             <div class="result-item">
               <span class="result-label">Напряжение Ox:</span>
               <span class="result-value">{{ formatNumber(sectionResults.stress) }} Па</span>
             </div>
             <div class="result-item">
-              <span class="result-label">Продольная сила Nx:</span>
-              <span class="result-value">{{ formatNumber(sectionResults.force) }} Н</span>
+              <span class="result-label">Перемещение Ux:</span>
+              <span class="result-value">{{ formatNumber(sectionResults.displacement) }} м</span>
             </div>
-            <div class="result-item">
-              <span class="result-label">Запас прочности:</span>
-              <span class="result-value">{{ formatNumber(sectionResults.safetyFactor) }}</span>
-            </div>
+            
+            
             <div class="result-item">
               <span class="result-label">Статус:</span>
               <span class="result-value" :class="sectionResults.status === 'OK' ? 'status-ok' : 'status-danger'">
@@ -1039,8 +1031,9 @@ const calculateRequiredHeight = () => {
   const maxForce = Math.max(...forces.map(f => Math.max(Math.abs(f.forceAtStart), Math.abs(f.forceAtEnd))))
   
   // Вычисляем необходимую высоту для каждой эпюры с учетом масштабирования
+  const epureSpacing = 30 // дополнительный отступ между эпюрами
   const scaleY = Math.max(maxDisp, maxStress, maxForce) > 0 ? 60 : 30 // высота для масштабирования
-  const totalEpureHeight = epureHeight * 3 + scaleY * 2 // 3 эпюры + масштабирование
+  const totalEpureHeight = epureHeight * 3 + 3 * epureSpacing + scaleY * 2 // 3 эпюры + 3 отступа + масштабирование
   
   return constructionHeight + margin + totalEpureHeight + padding
 }
@@ -1553,23 +1546,25 @@ function drawFixedSupport(ctx, side, beam, opts) {
 
   // Рисуем эпюру продольных сил Nx
 
-  const nxY = constructionHeight + margin + epureHeight / 2
+  const epureSpacing = 30 // дополнительный отступ между эпюрами
+  const nxY = constructionHeight + margin + epureSpacing + epureHeight / 2
 
   drawLongitudinalForceEpure(ctx, forces, rodLengths, originX, nxY, epureHeight, unitPxPerMeter * scaleX, maxForce, '#ef4444', 'Nx [qL]', dividerPositions, true)
   
 
   // Рисуем эпюру напряжений σx
 
-  const sigmaY = constructionHeight + margin + epureHeight + epureHeight / 2
+  const sigmaY = constructionHeight + margin + epureHeight + epureSpacing + epureSpacing + epureHeight / 2
 
   drawStressEpure(ctx, stresses, rodLengths, originX, sigmaY, epureHeight, unitPxPerMeter * scaleX, maxStress, '#f59e0b', 'σx [qL/A]', dividerPositions, false)
   
 
   // Рисуем эпюру перемещений ux пипец 2
 
-  const uxY = constructionHeight + margin + 2 * epureHeight + epureHeight / 2
+  const uxY = constructionHeight + margin + 2 * epureHeight + 3 * epureSpacing + epureHeight / 2
 
-  drawDisplacementEpureNew(ctx, displacements, rodLengths, originX, uxY, epureHeight, unitPxPerMeter * scaleX, maxDisp, '#3b82f6', 'Ux [qL/EA]', dividerPositions, false)
+  // Рисуем эпюру перемещений Ux (возвращает данные о бейджах для последующего рисования)
+  const uxLabelsData = drawDisplacementEpureNew(ctx, displacements, rodLengths, originX, uxY, epureHeight, unitPxPerMeter * scaleX, maxDisp, '#3b82f6', 'Ux [qL²/(EA)]', dividerPositions, false)
   
   // Рисуем розовые вертикальные линии-разделители от углов стержней
   ctx.strokeStyle = '#ec6aa0' // розовый цвет
@@ -1607,6 +1602,11 @@ function drawFixedSupport(ctx, side, beam, opts) {
   ctx.moveTo(lastLineX, lastLineStartY)
   ctx.lineTo(lastLineX, lastLineEndY)
   ctx.stroke()
+  
+  // Рисуем бейджи экстремумов ПОСЛЕ розовых линий (перекрывают их)
+  if (uxLabelsData) {
+    drawExtremaLabels(ctx, uxLabelsData)
+  }
 }
 
 const drawLongitudinalForceEpure = (ctx, forces, rodLengths, startX, centerY, height, scaleX, maxValue, color, label, dividerPositions, isFirstLane = false) => {
@@ -1932,18 +1932,28 @@ const drawEpure = (ctx, values, rodLengths, startX, centerY, height, scaleX, max
 }
 
 // Helper functions for parabola computation
-const uxAt = (x, params) => {
-  const { U0, UL, L, q, E, A } = params
+// ЯВНАЯ АНАЛИТИЧЕСКАЯ МОДЕЛЬ: u(x) = U0 + B*x + A*x²
+// где A = -q/(2*E*A) (БЕЗ L!), B = (UL-U0)/L + (q*L)/(2*E*A)
+// Все вычисления в локальных координатах x∈[0,L]
+const uxAtLocal = (x, p) => {
+  const { L, q, E, A: Area, U0, UL } = p
   
   // Защита от деления на ноль
   const eps = 1e-12
-  if (Math.abs(L) < eps || Math.abs(E) < eps || Math.abs(A) < eps) {
-    console.debug({ id: params.id, message: 'Zero division protection in uxAt', L, E, A })
+  if (Math.abs(L) < eps || Math.abs(E) < eps || Math.abs(Area) < eps) {
+    console.debug({ id: p.id, message: 'Zero division protection in uxAtLocal', L, E, Area })
     return U0 + ((UL - U0) * x / Math.max(L, eps))  // линейная интерполяция
   }
   
-  return U0 + ((UL - U0) / L) * x + (q * L / (2 * E * A)) * x  - (q / (2 * E * A)) * x * x
+  const EA = E * Area
+  const A2 = -q / (2 * EA)  // Квадратичный коэффициент (БЕЗ L!)
+  const B = (UL - U0) / L + (q * L) / (2 * EA)  // Линейный коэффициент
+  
+  return U0 + B * x + A2 * x * x
 }
+
+// Алиас для обратной совместимости
+const uxAt = uxAtLocal
 
 const uxVertex = (params) => {
   const { U0, UL, L, q, E, A } = params
@@ -2053,30 +2063,379 @@ const shouldAlertOnce = (elementId, pts) => {
   return true
 }
 
+// Утилита для вычисления глобального диапазона Ux по всем стержням
+function getUxExtent(displacements, rodLengths, rods, rodLoads) {
+  let minUx = Infinity
+  let maxUx = -Infinity
+  const EPS_Q = 1e-12
+  
+  // Собираем все значения ux из узлов
+  displacements.forEach(ux => {
+    if (Number.isFinite(ux)) {
+      minUx = Math.min(minUx, ux)
+      maxUx = Math.max(maxUx, ux)
+    }
+  })
+  
+  // Для каждого стержня проверяем значения внутри (особенно для парабол)
+  rods.forEach((rod, index) => {
+    if (index >= displacements.length - 1) return
+    
+    const U0 = Number(displacements[index])
+    const UL = Number(displacements[index + 1])
+    const L = Number(rod.L)
+    const E = Number(rod.E)
+    const A = Number(rod.A)
+    const rodLoad = rodLoads.find(l => l.rodNumber === index + 1)
+    const q = rodLoad ? Number(rodLoad.forceX) : 0
+    
+    // Проверяем узлы
+    minUx = Math.min(minUx, U0, UL)
+    maxUx = Math.max(maxUx, U0, UL)
+    
+    // Если есть распределенная нагрузка, проверяем вершину и несколько точек
+    if (Math.abs(q) > EPS_Q) {
+      const params = { U0, UL, L, q, E, A }
+      
+      // Функция для вычисления вершины (используем правильную формулу)
+      function vertexXLocal(p) {
+        const EA = p.E * p.A
+        const A2 = -p.q / (2 * EA)  // БЕЗ L!
+        if (Math.abs(A2) < 1e-18) return null
+        const B = (p.UL - p.U0) / p.L + (p.q * p.L) / (2 * EA)
+        const xv = -B / (2 * A2)
+        // Проверка, что вершина СТРОГО внутри интервала (0, L)
+        const tol = Math.max(1e-9 * p.L, 1e-12)
+        const isInner = xv > tol && xv < p.L - tol
+        if (!Number.isFinite(xv) || !isInner) return null
+        return xv
+      }
+      
+      function vertexULocal(p) {
+        const xv = vertexXLocal(p)
+        if (xv == null) return null
+        return { x: xv, u: uxAtLocal(xv, p) }
+      }
+      
+      const v = vertexULocal(params)
+      if (v) {
+        minUx = Math.min(minUx, v.u)
+        maxUx = Math.max(maxUx, v.u)
+      }
+      
+      // Проверяем несколько точек для надежности
+      for (let i = 1; i <= 8; i++) {
+        const x = (i / 9) * L
+        const u = uxAtLocal(x, params)
+        if (Number.isFinite(u)) {
+          minUx = Math.min(minUx, u)
+          maxUx = Math.max(maxUx, u)
+        }
+      }
+    }
+  })
+  
+  // Защита от вырождения
+  if (!Number.isFinite(minUx) || !Number.isFinite(maxUx) || Math.abs(maxUx - minUx) < 1e-9) {
+    const mag = Math.max(1e-6, Math.max(...displacements.map(Math.abs)))
+    minUx = -mag * 0.5
+    maxUx = mag * 0.5
+  }
+  
+  // Добавляем паддинг 5-10%
+  const pad = (maxUx - minUx) * 0.075
+  return { min: minUx - pad, max: maxUx + pad }
+}
+
+// Линейный маппер: value из [d0, d1] → [r0, r1]
+function mapLinear(value, d0, d1, r0, r1) {
+  if (Math.abs(d1 - d0) < 1e-12) return (r0 + r1) / 2
+  const t = (value - d0) / (d1 - d0)
+  return r0 + t * (r1 - r0)
+}
+
+// Утилиты для рисования бейджей экстремумов
+function fmt(n, d = 3) {
+  return n.toFixed(d)
+}
+
+function normalize(v) {
+  const len = Math.sqrt(v.x * v.x + v.y * v.y)
+  if (len < 1e-9) return { x: 0, y: -1 }
+  return { x: v.x / len, y: v.y / len }
+}
+
+// Вычисление нормали к кривой в точке экстремума
+function computeNormal(uxPts, vertexIdx, kind) {
+  // Находим соседние точки вокруг экстремума
+  if (uxPts.length < 2) {
+    // Если точек мало, используем вертикальную нормаль
+    return kind === 'min' ? { x: 0, y: -1 } : { x: 0, y: 1 }
+  }
+  
+  // Берем точки до и после вершины для вычисления касательной
+  const idx1 = Math.max(0, vertexIdx - 1)
+  const idx2 = Math.min(uxPts.length - 1, vertexIdx + 1)
+  
+  if (idx1 === idx2 || idx1 === vertexIdx || idx2 === vertexIdx) {
+    // Если точек недостаточно, используем вертикальную нормаль
+    return kind === 'min' ? { x: 0, y: -1 } : { x: 0, y: 1 }
+  }
+  
+  const p1 = uxPts[idx1]
+  const p2 = uxPts[idx2]
+  
+  // Касательная: направление от p1 к p2
+  const tangent = { x: p2.sx - p1.sx, y: p2.sy - p1.sy }
+  const tanLen = Math.sqrt(tangent.x * tangent.x + tangent.y * tangent.y)
+  
+  if (tanLen < 1e-9) {
+    // Если касательная слишком короткая, используем вертикальную нормаль
+    return kind === 'min' ? { x: 0, y: -1 } : { x: 0, y: 1 }
+  }
+  
+  const tanNorm = { x: tangent.x / tanLen, y: tangent.y / tanLen }
+  
+  // Нормаль: перпендикуляр к касательной (поворот на 90° против часовой)
+  // Для минимума нормаль направлена вверх, для максимума - вниз
+  let normal = { x: -tanNorm.y, y: tanNorm.x }
+  
+  // Убеждаемся, что нормаль направлена правильно (вверх для min, вниз для max)
+  if (kind === 'min' && normal.y > 0) {
+    normal.x = -normal.x
+    normal.y = -normal.y
+  } else if (kind === 'max' && normal.y < 0) {
+    normal.x = -normal.x
+    normal.y = -normal.y
+  }
+  
+  return normalize(normal)
+}
+
+// Рисование компактного бейджа с подписью экстремума
+function drawBadgeLabelSmall({ text, anchor, normal, offset, bounds, ctx, fontSize = 11, padX = 6, padY = 4, r = 5, alpha = 0.85 }) {
+  ctx.save()
+  
+  // Базовая позиция центра бейджа
+  let bx = anchor.x + normal.x * offset
+  let by = anchor.y + normal.y * offset
+  
+  // Измерение текста
+  ctx.font = `${fontSize}px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto`
+  const m = ctx.measureText(text)
+  const w = Math.ceil(m.width) + padX * 2
+  const h = Math.ceil(fontSize * 1.3) + padY * 2
+  
+  // Центр → левый верхний угол
+  let x = Math.round(bx - w / 2)
+  let y = Math.round(by - h / 2)
+  
+  // Кламп внутри bounds
+  const clamp = (v, a, b) => Math.max(a, Math.min(v, b))
+  x = clamp(x, bounds.x + 2, bounds.x + bounds.w - w - 2)
+  y = clamp(y, bounds.y + 2, bounds.y + bounds.h - h - 2)
+  
+  // Фон + тень (полупрозрачный)
+  ctx.beginPath()
+  const right = x + w
+  const bottom = y + h
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(right - r, y)
+  ctx.quadraticCurveTo(right, y, right, y + r)
+  ctx.lineTo(right, bottom - r)
+  ctx.quadraticCurveTo(right, bottom, right - r, bottom)
+  ctx.lineTo(x + r, bottom)
+  ctx.quadraticCurveTo(x, bottom, x, bottom - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+  
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.25)'
+  ctx.shadowBlur = 4
+  ctx.shadowOffsetX = 0
+  ctx.shadowOffsetY = 1
+  ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`
+  ctx.fill()
+  
+  // Текст
+  ctx.shadowColor = 'transparent'
+  ctx.fillStyle = '#0f172a'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, x + w / 2, y + h / 2)
+  
+  ctx.restore()
+  
+  // Возвращаем bbox для коллизий
+  return { x, y, w, h }
+}
+
+// Алиас для обратной совместимости
+const drawBadgeLabel = drawBadgeLabelSmall
+
+// Проверка пересечения двух прямоугольников
+function intersects(a, b) {
+  return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y)
+}
+
+// Алгоритм разнесения чипов в rail
+function placeChips(chips, rail) {
+  // Преобразуем x в центр чипа для удобства вычислений
+  chips.forEach(chip => {
+    chip.centerX = chip.x + chip.w / 2
+  })
+  
+  // Сортируем по центру x
+  chips.sort((a, b) => a.centerX - b.centerX)
+  const pad = 6
+  
+  // Проход слева направо: сдвигаем вправо при пересечении
+  for (let i = 1; i < chips.length; i++) {
+    const prev = chips[i - 1]
+    const cur = chips[i]
+    const overlap = (prev.centerX + prev.w / 2 + pad) - (cur.centerX - cur.w / 2)
+    if (overlap > 0) {
+      cur.centerX += overlap
+    }
+  }
+  
+  // Обратный проход справа налево: сдвигаем влево, если есть место
+  for (let i = chips.length - 2; i >= 0; i--) {
+    const next = chips[i + 1]
+    const cur = chips[i]
+    const overlap = (cur.centerX + cur.w / 2 + pad) - (next.centerX - next.w / 2)
+    if (overlap > 0 && cur.centerX - overlap >= rail.x + cur.w / 2) {
+      cur.centerX -= overlap
+    }
+  }
+  
+  // Финальный кламп по границам rail и восстановление x
+  chips.forEach(chip => {
+    if (chip.centerX - chip.w / 2 < rail.x) {
+      chip.centerX = rail.x + chip.w / 2
+    }
+    if (chip.centerX + chip.w / 2 > rail.x + rail.w) {
+      chip.centerX = rail.x + rail.w - chip.w / 2
+    }
+    chip.x = chip.centerX - chip.w / 2
+  })
+}
+
+// Рисование чипа в rail
+function drawChip(ctx, text, x, y, w, h, style) {
+  const { fontSize = 10.5, padX = 6, padY = 3, radius = 5, alpha = 0.9 } = style  // Увеличена непрозрачность до 0.9
+  
+  ctx.save()
+  
+  // Фон чипа
+  ctx.beginPath()
+  const right = x + w
+  const bottom = y + h
+  ctx.moveTo(x + radius, y)
+  ctx.lineTo(right - radius, y)
+  ctx.quadraticCurveTo(right, y, right, y + radius)
+  ctx.lineTo(right, bottom - radius)
+  ctx.quadraticCurveTo(right, bottom, right - radius, bottom)
+  ctx.lineTo(x + radius, bottom)
+  ctx.quadraticCurveTo(x, bottom, x, bottom - radius)
+  ctx.lineTo(x, y + radius)
+  ctx.quadraticCurveTo(x, y, x + radius, y)
+  ctx.closePath()
+  
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.15)'
+  ctx.shadowBlur = 3
+  ctx.shadowOffsetX = 0
+  ctx.shadowOffsetY = 1
+  ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`
+  ctx.fill()
+  
+  // Легкий внутренний контур для лучшего перекрытия линий
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)'
+  ctx.lineWidth = 1
+  ctx.stroke()
+  
+  // Текст
+  ctx.shadowColor = 'transparent'
+  ctx.font = `${fontSize}px Inter, ui-sans-serif, system-ui`
+  ctx.fillStyle = '#0f172a'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, x + w / 2, y + h / 2)
+  
+  ctx.restore()
+}
+
+// Рисование micro-halo подписи у точки
+function drawHaloText(ctx, text, x, y) {
+  ctx.save()
+  ctx.font = '10px Inter, ui-sans-serif, system-ui'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'bottom'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
+  ctx.strokeText(text, x, y - 8)  // белый «ореол»
+  ctx.fillStyle = '#0f172a'
+  ctx.fillText(text, x, y - 8)
+  ctx.restore()
+}
+
 const drawDisplacementEpureNew = (ctx, displacements, rodLengths, startX, centerY, height, scaleX, maxValue, color, label, dividerPositions, isFirstLane = false) => {
-  // Нулевая линия
+  // Возвращаем данные о бейджах для последующего рисования после розовых линий
+  let labelsData = null
+  // Диагностика экстремумов (включить через консоль: window.debugUxExtrema = true)
+  // Для включения диагностики выполните в консоли браузера: window.debugUxExtrema = true
+  
+  // Настройки для бейджей экстремумов
+  const showExtremaLabels = true
+  const extremaLabelDigits = 3
+  const labelMode = 'rail'  // 'rail' | 'microHalo'
+  const railHeight = 24
+  const railMaxRows = 2
+  const leaderStyle = { dashed: true, opacity: 0.6 }
+  const chipStyle = { fontSize: 10.5, padX: 6, padY: 3, radius: 5, alpha: 0.9 }  // Увеличена непрозрачность для перекрытия линий
+  
+  // ВЫЧИСЛЯЕМ ГЛОБАЛЬНЫЙ МАСШТАБ для всей эпюры Ux
+  const uxExtent = getUxExtent(displacements, rodLengths, props.rods, props.rodLoads)
+  const globalMinUx = uxExtent.min
+  const globalMaxUx = uxExtent.max
+  
+  // Создаем единый маппер для всех участков
+  // Высота области для Ux (90% от доступной высоты, минус railHeight если используется rail)
+  const railOffset = (labelMode === 'rail' && showExtremaLabels) ? railHeight : 0
+  const availableHeight = height * 0.90 - railOffset
+  const laneTop = centerY - availableHeight / 2
+  const laneBottom = centerY + availableHeight / 2 - railOffset
+  const laneHeight = laneBottom - laneTop
+  const railTop = laneBottom  // Верхняя граница rail
+  const railBottom = laneBottom + railHeight  // Нижняя граница rail
+  
+  // Маппер: ux → y (чем больше ux, тем выше точка)
+  const mapUxY = (ux) => mapLinear(ux, globalMinUx, globalMaxUx, laneBottom, laneTop)
+  const zeroUxY = mapUxY(0)
+  
+  // Нулевая линия (на уровне глобальной оси Ux=0, если она в пределах видимой области)
+  const totalWidth = rodLengths.reduce((sum, len) => sum + len * scaleX, 0)
+  if (zeroUxY >= laneTop && zeroUxY <= laneBottom) {
   ctx.strokeStyle = '#64748b'
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.moveTo(startX, centerY)
-  ctx.lineTo(startX + rodLengths.reduce((sum, len) => sum + len * scaleX, 0), centerY)
+    ctx.moveTo(startX, zeroUxY)
+    ctx.lineTo(startX + totalWidth, zeroUxY)
   ctx.stroke()
+  }
   
   // Подпись "0" белым цветом слева от нулевой линии - только для первой эпюры
-  if (isFirstLane) {
+  if (isFirstLane && zeroUxY >= laneTop && zeroUxY <= laneBottom) {
     ctx.fillStyle = '#ffffff'
     ctx.font = '12px Arial'
     ctx.textAlign = 'right'
-    ctx.fillText('0', startX - 10, centerY + 4)
+    ctx.fillText('0', startX - 10, zeroUxY + 4)
   }
   
   // Подпись оси белым цветом слева от нолика
   ctx.fillStyle = '#ffffff'
   ctx.textAlign = 'right'
   ctx.fillText(label, startX - 25, centerY + 4)
-  
-  // Масштаб для значений
-  const scaleY = maxValue > 0 ? (height / 2 - 10) / maxValue : 1
   
   // Массив занятых областей для избежания перекрытий подписей
   const takenRects = []
@@ -2086,57 +2445,51 @@ const drawDisplacementEpureNew = (ctx, displacements, rodLengths, startX, center
   ctx.fillStyle = color
   ctx.lineWidth = 2
   
+  // Экстремумы считаем только внутренними для участка
+  // Если вершина попала в узел (границу), мы его не считаем экстремумом этого участка
+  
+  // Массив для хранения экстремумов для последующего рисования бейджей
+  const extremaForLabels = []
+  
   let currentX = startX
   displacements.forEach((disp, index) => {
-    // Точка в начале стержня
-    let startY = centerY - disp * scaleY
-    // Минимальное расстояние от оси - 2 пикселя
-    if (Math.abs(startY - centerY) < 2) {
-      startY = disp >= 0 ? centerY - 2 : centerY + 2
-    }
+    // Точка в начале стержня (используем глобальный маппер)
+    const startY = mapUxY(disp)
     
     ctx.beginPath()
     ctx.arc(currentX, startY, 3, 0, 2 * Math.PI)
     ctx.fill()
     
-    // Подпись значения в начале стержня (белый цвет)
-    ctx.fillStyle = '#ffffff' // белый цвет
-    ctx.font = '10px Arial'
-    ctx.textAlign = 'left'
-    // Позиционирование справа от розовой линии
-    const labelX = dividerPositions[index] + 3
-    // Если точка отрицательная - подпись ниже на 10 пикселей, если положительная - выше на 10 пикселей
-    const labelY = disp < 0 ? startY + 10 : startY - 10
-    ctx.fillText(formatNumber(disp, 2), labelX, labelY)
-    ctx.fillStyle = color
+    // Подпись значения в начале стержня (белый цвет) - только если не последний узел
+    if (index < displacements.length - 1) {
+      ctx.fillStyle = '#ffffff'
+      ctx.font = '10px Arial'
+      ctx.textAlign = 'left'
+      const labelX = dividerPositions[index] + 3
+      const labelY = disp < 0 ? startY + 10 : startY - 10
+      ctx.fillText(formatNumber(disp, 2), labelX, labelY)
+      ctx.fillStyle = color
+    }
     
     // Обработка элемента между узлами
     if (index < displacements.length - 1) {
       const nextDisp = displacements[index + 1]
       const nextX = currentX + rodLengths[index] * scaleX
-      let nextDispY = centerY - nextDisp * scaleY
-      // Минимальное расстояние от оси - 2 пикселя
-      if (Math.abs(nextDispY - centerY) < 2) {
-        nextDispY = nextDisp >= 0 ? centerY - 2 : centerY + 2
-      }
+      const nextDispY = mapUxY(nextDisp)
       
       // Точка в конце стержня
       ctx.beginPath()
       ctx.arc(nextX, nextDispY, 3, 0, 2 * Math.PI)
       ctx.fill()
       
-      // Подпись значения в конце стержня (белый цвет) - только если не последний узел
-      if (index < displacements.length - 1) {
-        ctx.fillStyle = '#ffffff' // белый цвет
+      // Подпись значения в конце стержня (белый цвет)
+      ctx.fillStyle = '#ffffff'
         ctx.font = '10px Arial'
         ctx.textAlign = 'right'
-        // Позиционирование слева от розовой линии
         const endLabelX = dividerPositions[index + 1] - 3
-        // Если точка отрицательная - подпись ниже на 10 пикселей, если положительная - выше на 10 пикселей
         const endLabelY = nextDisp < 0 ? nextDispY + 10 : nextDispY - 10
         ctx.fillText(formatNumber(nextDisp, 2), endLabelX, endLabelY)
         ctx.fillStyle = color
-      }
       
       // Проверяем наличие распределенной нагрузки на элементе
       const rodIndex = index
@@ -2150,6 +2503,136 @@ const drawDisplacementEpureNew = (ctx, displacements, rodLengths, startX, center
         const Ep = Number(rod.E)
         const Ap = Number(rod.A)
         
+        // EPS для проверки распределенной нагрузки
+        const EPS_Q = 1e-12
+        
+        // Функция для вычисления X-координаты вершины в локальных метрах
+        // ЯВНАЯ АНАЛИТИЧЕСКАЯ МОДЕЛЬ: u(x) = U0 + B*x + A*x²
+        // A = -q/(2*E*A) БЕЗ множителя L!
+        // B = (UL-U0)/L + (q*L)/(2*E*A)
+        // xv = -B/(2*A) - вершина параболы
+        function vertexXLocal(p) {
+          const { L, q, E, A: Area, U0, UL } = p
+          const EA = E * Area
+          
+          // Квадратичный коэффициент (БЕЗ L!)
+          const A2 = -q / (2 * EA)
+          
+          // Проверка на линейность (нет внутреннего экстремума)
+          if (Math.abs(A2) < 1e-18) {
+            return null  // Диагностика будет в vertexULocal
+          }
+          
+          // Линейный коэффициент
+          const B = (UL - U0) / L + (q * L) / (2 * EA)
+          
+          // Устойчивая формула вершины
+          let xv = -B / (2 * A2)
+          
+          // Проверка на валидность
+          if (!Number.isFinite(xv)) {
+            return null  // Диагностика будет в vertexULocal
+          }
+          
+          // Проверка, что вершина СТРОГО внутри интервала (0, L)
+          // tol должен быть достаточно большим, чтобы исключить граничные точки
+          const tol = Math.max(1e-9 * L, 1e-12)
+          const isInner = xv > tol && xv < L - tol
+          if (!isInner) {
+            return null  // НЕ экстремум - слишком близко к границе
+          }
+          
+          return xv
+        }
+        
+        // Функция для вычисления вершины (x, u, kind) с диагностикой
+        // Все вычисления в локальных координатах, перевод в глобальные только при рендере
+        function vertexULocal(p) {
+          const { L, q, E, A: Area, U0, UL } = p
+          const EA = E * Area
+          
+          // Квадратичный коэффициент (БЕЗ L!)
+          const A2 = -q / (2 * EA)
+          
+          // Линейный коэффициент
+          const B = (UL - U0) / L + (q * L) / (2 * EA)
+          
+          const xv = vertexXLocal(p)
+          const x0_global = currentX
+          const x1_global = currentX + rodLengths[index] * scaleX
+          
+          // ВСЕГДА выводим диагностику в консоль для каждого участка
+          const segId = `rod=${rodIndex + 1}`
+          
+          if (xv == null) {
+            let rejectionReason = 'неизвестная причина'
+            if (Math.abs(A2) < 1e-18) {
+              rejectionReason = 'линейный участок (|A| < 1e-18)'
+            } else {
+              // Попробуем вычислить xv для диагностики
+              const xv_test = -B / (2 * A2)
+              const tol = 1e-9 * L
+              if (!Number.isFinite(xv_test)) {
+                rejectionReason = 'xv не конечен (A или B некорректны)'
+              } else if (xv_test <= tol) {
+                rejectionReason = `xv=${xv_test.toFixed(6)} слишком близко к началу (≤ ${tol.toFixed(9)})`
+              } else if (xv_test >= L - tol) {
+                rejectionReason = `xv=${xv_test.toFixed(6)} слишком близко к концу (≥ ${(L - tol).toFixed(6)})`
+              } else {
+                rejectionReason = 'неизвестная причина (xv должен быть валиден)'
+              }
+            }
+            
+            const u0 = uxAtLocal(0, p)
+            const uL = uxAtLocal(L, p)
+            
+            console.info(`[Ux Extrema ${segId}] НЕТ ЭКСТРЕМУМА`, {
+              segId,
+              L: L.toFixed(6),
+              q: q.toFixed(6),
+              EA: EA.toFixed(6),
+              U0: U0.toFixed(6),
+              UL: UL.toFixed(6),
+              A: A2.toFixed(12),
+              B: B.toFixed(12),
+              u0: u0.toFixed(6),
+              uL: uL.toFixed(6),
+              причина: rejectionReason
+            })
+            return null
+          }
+          
+          const u = uxAtLocal(xv, p)
+          const u0 = uxAtLocal(0, p)
+          const uL = uxAtLocal(L, p)
+          
+          // Определяем тип экстремума по знаку A:
+          // A < 0 → максимум (парабола вниз)
+          // A > 0 → минимум (парабола вверх)
+          const kind = A2 < 0 ? 'max' : 'min'
+          
+          // ВСЕГДА выводим диагностику в консоль
+          console.info(`[Ux Extrema ${segId}] ВЕРШИНА НАЙДЕНА`, {
+            segId,
+            L: L.toFixed(6),
+            q: q.toFixed(6),
+            EA: EA.toFixed(6),
+            U0: U0.toFixed(6),
+            UL: UL.toFixed(6),
+            A: A2.toFixed(12),
+            B: B.toFixed(12),
+            xv_local: xv.toFixed(6),
+            x0_global: x0_global.toFixed(2),
+            x1_global: x1_global.toFixed(2),
+            u_xv: u.toFixed(6),
+            u_0: u0.toFixed(6),
+            u_L: uL.toFixed(6),
+            kind: kind
+          })
+          
+          return { x: xv, u: u, kind: kind }
+        }
+        
         const params = {
           U0: disp,
           UL: nextDisp,
@@ -2162,168 +2645,283 @@ const drawDisplacementEpureNew = (ctx, displacements, rodLengths, startX, center
         // Добавляем id к параметрам для логирования
         params.id = rodIndex + 1
         
-        const vertex = uxVertex(params)
-        const samples = sampleUxParabola(params, 128)
+        const hasQ = Math.abs(params.q) > EPS_Q
         
-        // Проверка на параболичность
-        const eps = 1e-12
-        if (Math.abs(qp) < eps) {
-          // Линейная эпюра, не парабола
-          if (shouldAlertOnce(rodIndex + 1, samples)) {
-            alert('Эпюра смещений не является параболой (q≈0)')
-          }
-        } else {
-          // Всегда считаем параболой и показываем алерт с вершиной
-          if (vertex && shouldAlertOnce(rodIndex + 1, samples)) {
-            const xv = Number(vertex.x.toFixed(3))
-            const uv = Number(vertex.u.toFixed(3))
-            alert(`Парабола смещений: вершина x = ${xv}, Ux = ${uv}`)
-          }
+        // Функция для добавления уникальных точек
+        const pushUnique = (xs, x, eps = 1e-9) => {
+          if (xs.every(v => Math.abs(v - x) > eps)) xs.push(x)
         }
         
-        // Рисуем параболу с помощью множества точек
-        ctx.beginPath()
-        for (let i = 0; i < samples.length; i++) {
-          const { x, u } = samples[i]
-          const canvasX = currentX + (x / Lp) * rodLengths[index] * scaleX
-          const canvasY = centerY - u * scaleY
+        // 1) Соберём список X-точек
+        const xList = []
+        if (hasQ) {
+          pushUnique(xList, 0)
+          const xv = vertexXLocal(params)
+          if (xv != null) pushUnique(xList, xv)
+          pushUnique(xList, Lp)
+        }
+        
+        // 2) Добавим обычные семплы (чтобы кривая была гладкой)
+        const n = 120
+        for (let i = 0; i <= n; i++) {
+          const x = (i / n) * Lp
+          pushUnique(xList, x)
+        }
+        
+        // 3) Отсортируем и превратим в экранные точки (используем ГЛОБАЛЬНЫЙ маппер)
+        xList.sort((a, b) => a - b)
+        
+        const uxPts = []
+        for (const x of xList) {
+          // В этом блоке всегда есть распределенная нагрузка, используем формулу параболы
+          // x - локальная координата в метрах [0, L]
+          const uRaw = uxAtLocal(x, params)
           
-          if (i === 0) {
-            ctx.moveTo(canvasX, canvasY)
-          } else {
-            ctx.lineTo(canvasX, canvasY)
+          const xi = x / Lp
+          const sx = currentX + xi * rodLengths[index] * scaleX  // Перевод в глобальные координаты только при рендере
+          const sy = mapUxY(uRaw)  // ВАЖНО: используем глобальный маппер
+          
+          if (Number.isFinite(sx) && Number.isFinite(sy)) {
+            uxPts.push({ sx, sy })
           }
         }
-        ctx.stroke()
         
-        // Рисуем вершину параболы если она есть в этом элементе
+        // Находим вершину для алерта
+        const vertex = vertexULocal(params)
+        
+        // Проверяем, является ли вершина валидным экстремумом
+        // Упрощенная валидация: достаточно проверки "строго внутри" + знак A
+        // Сравнение с концами оставлено только как sanity-check (для диагностики)
+        let validExtremum = null
         if (vertex) {
-          // vertex содержит локальные координаты (x в метрах, u в сырых единицах)
-          const xLocal = vertex.x  // локальная координата в метрах (0 до L)
-          const uRaw = vertex.u    // смещение в тех же единицах, что и ось Ux
+          // Вершина уже проверена на "строго внутри" в vertexXLocal
+          // Тип экстремума уже определен по знаку A в vertexULocal
+          // Если vertex не null, значит это валидный внутренний экстремум
+          validExtremum = {
+            x: vertex.x,
+            u: vertex.u,
+            kind: vertex.kind
+          }
           
-          // Преобразуем в экранные координаты ТОЧНО так же, как точки кривой
-          const vertexX = currentX + (xLocal / Lp) * rodLengths[index] * scaleX
-          const vertexY = centerY - uRaw * scaleY
-          const axisY = centerY   // ось Ux: y=0
+          // Sanity-check для диагностики (не влияет на валидацию)
+          if (window.debugUxExtrema) {
+            const epsUx = Math.max(1e-9, 1e-6 * (globalMaxUx - globalMinUx))
+            const u0 = uxAtLocal(0, params)
+            const uL = uxAtLocal(params.L, params)
+            const uMinEnds = Math.min(u0, uL)
+            const uMaxEnds = Math.max(u0, uL)
+            
+            const checkPassed = (vertex.kind === 'min' && vertex.u <= uMinEnds - epsUx) ||
+                                (vertex.kind === 'max' && vertex.u >= uMaxEnds + epsUx)
+            
+            if (!checkPassed) {
+              console.debug(`[Ux Extrema rod=${rodIndex + 1}] Sanity-check: экстремум незначительно отличается от концов`, {
+                vertex: vertex,
+                u0: u0.toFixed(6),
+                uL: uL.toFixed(6),
+                epsUx: epsUx.toFixed(9)
+              })
+            }
+          }
+        } else if (hasQ) {
+          // Фоллбэк: если вершина не найдена, но есть распределенная нагрузка,
+          // проверяем середину участка на наличие экстремума
+          const uMid = uxAtLocal(Lp / 2, params)
+          const epsUx = Math.max(1e-9, 1e-6 * (globalMaxUx - globalMinUx))
+          const u0 = uxAtLocal(0, params)
+          const uL = uxAtLocal(Lp, params)
+          const uMinEnds = Math.min(u0, uL)
+          const uMaxEnds = Math.max(u0, uL)
           
-          // Константы оформления
-          const VERTEX_COLOR = '#ff66cc'  // розовый
-          const DOT_R = 4                 // радиус маркера
-          const LINE_ALPHA = 0.7          // прозрачность вертикали
-          const BELOW_OFFSET = 14         // отступ подписи ниже кривой (px)
-          const AXIS_CLEARANCE = 8        // минимальный зазор от оси X (px)
-          
-          // 1) Маркер без свечения
-          ctx.save()
-          ctx.fillStyle = VERTEX_COLOR
-          ctx.strokeStyle = '#ffffff'
-          ctx.lineWidth = 2
-          ctx.beginPath()
-          ctx.arc(vertexX, vertexY, DOT_R, 0, 2*Math.PI)
-          ctx.fill()
-          ctx.stroke()
-          ctx.restore()
-          
-          // 2) Вертикальная линия к оси X
-          ctx.save()
-          ctx.strokeStyle = VERTEX_COLOR
-          ctx.globalAlpha = LINE_ALPHA
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.moveTo(vertexX, vertexY)
-          ctx.lineTo(vertexX, axisY)
-          ctx.stroke()
-          ctx.restore()
-          
-          // 3) Бейдж-подпись (Ux*, x*) - всегда ниже кривой
-          ctx.font = '10px Inter, Arial'
-          ctx.textAlign = 'center'
-          const line1 = `Ux* = ${formatNumber(uRaw, 2)}`
-          const line2 = `x* = ${formatNumber(xLocal, 2)} м`
-          const textW = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width)
-          const badgeW = Math.ceil(textW) + 14
-          const badgeH = 12*2 + 10
-          
-          // Базовая позиция — прямо под кривой
-          let badgeX = vertexX - badgeW/2
-          let badgeY = vertexY + BELOW_OFFSET
-          
-          // Не задеваем ось X: бейдж должен целиком помещаться выше axisY - AXIS_CLEARANCE
-          const maxY = axisY - AXIS_CLEARANCE - badgeH
-          if (badgeY > maxY) badgeY = maxY
-          
-          // Границы канваса
-          if (badgeX < 0) badgeX = 0
-          const maxX = ctx.canvas.width - badgeW
-          if (badgeX > maxX) badgeX = maxX
-          
-          // Отрисовка бейджа
-          ctx.save()
-          ctx.globalAlpha = 0.92
-          ctx.fillStyle = 'rgba(31,31,42,0.85)'  // тёмный полупрозрачный фон
-          ctx.strokeStyle = VERTEX_COLOR + '80'   // розовая рамка
-          ctx.lineWidth = 1
-          roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 7)
-          ctx.fill()
-          ctx.stroke()
-          ctx.globalAlpha = 1
-          ctx.fillStyle = '#ffdff3'  // мягкий светлый текст
-          ctx.fillText(line1, badgeX + badgeW/2, badgeY + 16)
-          ctx.fillText(line2, badgeX + badgeW/2, badgeY + 28)
-          ctx.restore()
+          if (uMid < uMinEnds - epsUx || uMid > uMaxEnds + epsUx) {
+            console.info(`[Ux Extrema rod=${rodIndex + 1}] ФОЛЛБЭК: возможный экстремум в середине`, {
+              uMid: uMid.toFixed(6),
+              u0: u0.toFixed(6),
+              uL: uL.toFixed(6),
+              epsUx: epsUx.toFixed(9),
+              note: 'Вершина не найдена аналитически, но середина участка указывает на экстремум'
+            })
+          }
         }
         
-        // Перпендикуляры синего цвета через каждые 5 пикселей
+        // Всегда показываем алерт для каждого стержня
+          if (shouldAlertOnce(rodIndex + 1, uxPts.map(p => ({ x: p.sx, u: p.sy })))) {
+          if (validExtremum) {
+            const xv = Number(validExtremum.x.toFixed(3))
+            const uv = Number(validExtremum.u.toFixed(3))
+            alert(`Стержень ${rodIndex + 1}: Экстремум найден!\nТип: ${validExtremum.kind === 'min' ? 'минимум' : 'максимум'}\nКоордината x = ${xv} м\nЗначение Ux = ${uv} м`)
+          } else if (hasQ) {
+            // Определяем причину отбраковки
+            let reason = 'неизвестная причина'
+            if (!vertex) {
+              const { L, q, E, A } = params
+              const EA = E * A
+              const A_coef = -q / (2 * EA)
+              if (Math.abs(A_coef) < 1e-18) {
+                reason = 'линейный участок (|A| < 1e-18) — экстремума нет'
+              } else {
+                reason = 'вершина вне участка (слишком близко к границе)'
+              }
+            }
+            // Для отладки можно вывести в консоль, но попап не показываем
+            if (window.debugUxExtrema) {
+              console.info(`[Ux Extrema rod=${rodIndex + 1}] Попап не показываем (только для отладки)`, {
+                причина: reason,
+                q: params.q.toFixed(6),
+                L: params.L.toFixed(3)
+              })
+            }
+            // По умолчанию без попапа, только в консоль при debug
+            // alert(`Стержень ${rodIndex + 1}: Экстремум не найден\nПричина: ${reason}\nq = ${params.q.toFixed(6)}, L = ${params.L.toFixed(3)} м`)
+          } else {
+            alert(`Стержень ${rodIndex + 1}: Экстремум не найден\n(нет распределенной нагрузки, линейный участок)`)
+          }
+        }
+        
+        // 4) Сначала рисуем перпендикуляры (барчики) - ЗАТЕМ кривую поверх
+        // Унифицированная частота штриховки: каждые 6 пикселей по X (как для линейных участков)
         ctx.strokeStyle = '#3b82f6' // синий цвет
         ctx.lineWidth = 1
         
-        const lineLength = Math.sqrt((nextX - currentX) ** 2 + (nextDispY - startY) ** 2)
-        const perpendicularCount = Math.floor(lineLength / 5)
+        const rodWidthPx = rodLengths[index] * scaleX
+        const stepPx = 6  // фиксированный шаг в пикселях (одинаковый для всех участков)
+        const stepCount = Math.floor(rodWidthPx / stepPx)
         
-        for (let i = 1; i < perpendicularCount; i++) {
-          const t = i / perpendicularCount
-          const x_in_world = t * params.L  // координата в мировых единицах
-          const lineX = currentX + (nextX - currentX) * t
-          const lineY = centerY - uxAt(x_in_world, params) * scaleY
+        for (let i = 1; i < stepCount; i++) {
+          const t = i / stepCount
+          const sx = currentX + t * rodWidthPx
           
-          // Вертикальный отрезок от кривой к оси X (строго вертикально)
-          const perpendicularLength = Math.abs(lineY - centerY)
-          if (perpendicularLength > 2) {
+          // Вычисляем значение ux для этого x напрямую
+          // xLocal - локальная координата в метрах [0, L]
+          const xLocal = t * Lp
+          const uRaw = uxAtLocal(xLocal, params)  // В этом блоке всегда есть распределенная нагрузка
+          const sy = mapUxY(uRaw)
+          
+          // Вертикальный отрезок от кривой к глобальной оси Ux=0
+          const perpendicularLength = Math.abs(sy - zeroUxY)
+          if (perpendicularLength > 1) {
             ctx.beginPath()
-            ctx.moveTo(lineX, lineY)
-            ctx.lineTo(lineX, centerY)  // строго вертикально к оси
+            ctx.moveTo(sx, sy)
+            ctx.lineTo(sx, zeroUxY)  // ВАЖНО: к глобальной оси Ux=0
             ctx.stroke()
           }
         }
         
-        // Возвращаем цвет обратно
+        // 5) Теперь рисуем непрерывную кривую поверх барчиков
+        ctx.save()
+        ctx.beginPath()
+        for (let i = 0; i < uxPts.length; i++) {
+          const p = uxPts[i]
+          if (i === 0) {
+            ctx.moveTo(p.sx, p.sy)
+          } else {
+            ctx.lineTo(p.sx, p.sy)
+          }
+        }
+        ctx.setLineDash([])
+        ctx.globalAlpha = 1
         ctx.strokeStyle = color
-      } else {
+        ctx.lineWidth = 2
+        ctx.globalCompositeOperation = 'source-over'
+        ctx.stroke()
+        ctx.restore()
+        
+        // Рисуем вершину параболы если она валидна
+        if (validExtremum) {
+          const vertexX = currentX + (validExtremum.x / Lp) * rodLengths[index] * scaleX
+          const vertexY = mapUxY(validExtremum.u)  // ВАЖНО: используем глобальный маппер
+          
+          // Проверяем, что точка в видимой области
+          if (vertexX >= startX && vertexX <= startX + totalWidth &&
+              vertexY >= laneTop && vertexY <= laneBottom) {
+            // Рисуем маркер экстремума
+            ctx.save()
+            ctx.fillStyle = '#ff66cc'
+            ctx.beginPath()
+            ctx.arc(vertexX, vertexY, 5, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.restore()
+            
+            // Сохраняем информацию об экстремуме для последующего рисования бейджа
+            if (showExtremaLabels) {
+              // Вычисляем глобальную X-координату в метрах (кумулятивная длина от начала эпюры)
+              const xGlobalMeters = rodLengths.slice(0, index).reduce((sum, len) => sum + len, 0) + validExtremum.x
+              
+              // Находим индекс вершины в массиве uxPts (ближайшая точка)
+              let vertexIdx = 0
+              let minDist = Infinity
+              for (let i = 0; i < uxPts.length; i++) {
+                const dist = Math.abs(uxPts[i].sx - vertexX)
+                if (dist < minDist) {
+                  minDist = dist
+                  vertexIdx = i
+                }
+              }
+              
+              extremaForLabels.push({
+                anchor: { x: vertexX, y: vertexY },
+                xGlobalMeters: xGlobalMeters,
+                uValue: validExtremum.u,
+                kind: validExtremum.kind,
+                uxPts: uxPts,  // Для вычисления нормали
+                vertexIdx: vertexIdx  // Реальный индекс вершины в массиве
+              })
+            }
+            
+            // Диагностика: рисуем крестик для отладки
+            if (window.debugUxExtrema) {
+              ctx.save()
+              ctx.strokeStyle = '#ffff00'
+              ctx.lineWidth = 1
+              ctx.beginPath()
+              ctx.moveTo(vertexX - 8, vertexY)
+              ctx.lineTo(vertexX + 8, vertexY)
+              ctx.moveTo(vertexX, vertexY - 8)
+              ctx.lineTo(vertexX, vertexY + 8)
+              ctx.stroke()
+              ctx.restore()
+            }
+          } else if (window.debugUxExtrema) {
+            console.warn('[Ux Extrema] Valid extremum outside visible area', {
+              rodIndex: rodIndex + 1,
+              vertexX,
+              vertexY,
+              bounds: { startX, totalWidth, laneTop, laneBottom }
+            })
+          }
+        }
+        
+        } else {
         // Линейная интерполяция для элементов без распределенной нагрузки
+        // Показываем алерт, что экстремума нет (линейный участок)
+        if (shouldAlertOnce(rodIndex + 1, [])) {
+          alert(`Стержень ${rodIndex + 1}: Экстремум не найден\n(нет распределенной нагрузки, линейный участок)`)
+        }
+        
       ctx.beginPath()
       ctx.moveTo(currentX, startY)
       ctx.lineTo(nextX, nextDispY)
       ctx.stroke()
       
-      // Перпендикуляры синего цвета через каждые 5 пикселей
+        // Перпендикуляры синего цвета через каждые 6 пикселей (унифицированная частота)
       ctx.strokeStyle = '#3b82f6' // синий цвет
       ctx.lineWidth = 1
       
-      const lineLength = Math.sqrt((nextX - currentX) ** 2 + (nextDispY - startY) ** 2)
-      const perpendicularCount = Math.floor(lineLength / 5)
+        const rodWidthPx = rodLengths[index] * scaleX
+        const stepPx = 6  // фиксированный шаг в пикселях (одинаковый для всех участков)
+        const perpendicularCount = Math.floor(rodWidthPx / stepPx)
       
       for (let i = 1; i < perpendicularCount; i++) {
         const t = i / perpendicularCount
-        const lineX = currentX + (nextX - currentX) * t
+          const lineX = currentX + t * rodWidthPx
         const lineY = startY + (nextDispY - startY) * t
         
-        // Перпендикуляр к линии (направление к оси X)
-        const perpendicularLength = Math.abs(lineY - centerY)
-        if (perpendicularLength > 2) { // только если линия не слишком близко к оси
+          // Перпендикуляр к линии (направление к глобальной оси Ux=0)
+          const perpendicularLength = Math.abs(lineY - zeroUxY)
+          if (perpendicularLength > 1) {
           ctx.beginPath()
           ctx.moveTo(lineX, lineY)
-          ctx.lineTo(lineX, centerY)
+            ctx.lineTo(lineX, zeroUxY)  // ВАЖНО: к глобальной оси Ux=0
           ctx.stroke()
         }
       }
@@ -2335,6 +2933,136 @@ const drawDisplacementEpureNew = (ctx, displacements, rodLengths, startX, center
       currentX = nextX
     }
   })
+  
+  // Узловые экстремумы не показываем - только внутренние для участков
+  
+  // Сохраняем данные о бейджах для последующего рисования после розовых линий
+  if (showExtremaLabels && extremaForLabels.length > 0) {
+    labelsData = {
+      labelMode,
+      extremaForLabels,
+      startX,
+      totalWidth,
+      laneTop,
+      laneBottom,
+      railTop,
+      railHeight,
+      leaderStyle,
+      chipStyle,
+      extremaLabelDigits
+    }
+  }
+  
+  // Возвращаем данные о бейджах для рисования после розовых линий
+  return labelsData
+}
+
+// Функция для рисования бейджей экстремумов (вызывается после розовых линий)
+function drawExtremaLabels(ctx, labelsData) {
+  if (!labelsData || !labelsData.extremaForLabels || labelsData.extremaForLabels.length === 0) return
+  
+  const { labelMode, extremaForLabels, startX, totalWidth, laneTop, laneBottom, railTop, leaderStyle, chipStyle, extremaLabelDigits } = labelsData
+  
+  if (labelMode === 'rail') {
+    // Режим Label Rail: полоса подписей снизу
+    
+    // 1) Рисуем лидеры (тонкие пунктирные линии от точек до rail)
+    ctx.save()
+    ctx.strokeStyle = `rgba(148, 163, 184, ${leaderStyle.opacity})`  // slate-400
+    ctx.lineWidth = 1
+    ctx.setLineDash(leaderStyle.dashed ? [3, 3] : [])
+    
+    const chips = []
+    
+    for (const ext of extremaForLabels) {
+      const vertexX = ext.anchor.x
+      const vertexY = ext.anchor.y
+      
+      // Лидер от точки экстремума до верхней границы rail
+      if (vertexY < railTop) {
+        ctx.beginPath()
+        ctx.moveTo(vertexX, vertexY)
+        ctx.lineTo(vertexX, railTop)
+        ctx.stroke()
+      }
+      
+      // Форматируем текст: x=5.005; Ux=−6.726
+      const labelText = `x=${fmt(ext.xGlobalMeters, extremaLabelDigits)}; Ux=${fmt(ext.uValue, extremaLabelDigits)}`
+      
+      // Измеряем размер чипа
+      ctx.font = `${chipStyle.fontSize}px Inter, ui-sans-serif, system-ui`
+      const m = ctx.measureText(labelText)
+      const chipW = Math.ceil(m.width) + chipStyle.padX * 2
+      const chipH = Math.ceil(chipStyle.fontSize * 1.3) + chipStyle.padY * 2
+      
+      // Центрируем по X экстремума
+      const chipX = vertexX - chipW / 2
+      const chipY = railTop + 12  // Небольшой отступ от верхней границы rail
+      
+      chips.push({
+        x: chipX,
+        y: chipY,
+        w: chipW,
+        h: chipH,
+        text: labelText
+      })
+    }
+    
+    ctx.restore()
+    
+    // 2) Разносим чипы алгоритмом nudge
+    const railBounds = {
+      x: startX,
+      w: totalWidth
+    }
+    placeChips(chips, railBounds)
+    
+    // 3) Рисуем чипы (ПОСЛЕ розовых линий - перекрывают их)
+    for (const chip of chips) {
+      drawChip(ctx, chip.text, chip.x, chip.y, chip.w, chip.h, chipStyle)
+    }
+    
+  } else if (labelMode === 'microHalo') {
+    // Режим Micro-Halo: мини-подписи у точки
+    
+    for (const ext of extremaForLabels) {
+      const vertexX = ext.anchor.x
+      const vertexY = ext.anchor.y
+      
+      // Вычисляем нормаль к кривой
+      const normal = computeNormal(ext.uxPts, ext.vertexIdx, ext.kind)
+      
+      // Форматируем текст: x=5.005; Ux=−6.726
+      const labelText = `x=${fmt(ext.xGlobalMeters, extremaLabelDigits)}; Ux=${fmt(ext.uValue, extremaLabelDigits)}`
+      
+      // Позиция подписи: отступ 8-10px вдоль нормали
+      const offset = 10
+      let labelX = vertexX + normal.x * offset
+      let labelY = vertexY + normal.y * offset
+      
+      // Проверяем границы и отзеркаливаем при необходимости
+      const bounds = {
+        x: startX,
+        y: laneTop,
+        w: totalWidth,
+        h: laneBottom - laneTop
+      }
+      
+      if (labelX < bounds.x || labelX > bounds.x + bounds.w ||
+          labelY < bounds.y || labelY > bounds.y + bounds.h) {
+        // Отзеркаливаем по нормали
+        labelX = vertexX - normal.x * offset
+        labelY = vertexY - normal.y * offset
+      }
+      
+      // Кламп внутри bounds
+      labelX = Math.max(bounds.x + 20, Math.min(labelX, bounds.x + bounds.w - 20))
+      labelY = Math.max(bounds.y + 10, Math.min(labelY, bounds.y + bounds.h - 10))
+      
+      // Рисуем halo-текст
+      drawHaloText(ctx, labelText, labelX, labelY)
+    }
+  }
 }
 
 
@@ -2357,11 +3085,7 @@ const drawDisplacementEpure = (ctx, displacements, rodLengths, startX, centerY, 
 
 
   
-  // Подпись "0" белым цветом слева от нулевой линии
-  ctx.fillStyle = '#ffffff'
-  ctx.font = '12px Arial'
-  ctx.textAlign = 'right'
-  ctx.fillText('0', startX - 10, centerY + 4)
+
   
   // Подпись оси белым цветом слева от нолика
   ctx.fillStyle = '#ffffff'
@@ -2370,7 +3094,6 @@ const drawDisplacementEpure = (ctx, displacements, rodLengths, startX, centerY, 
   
 
   // Масштаб для значений
-
   const scaleY = maxValue > 0 ? (height / 2 - 10) / maxValue : 1
 
   

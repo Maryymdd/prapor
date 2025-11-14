@@ -2,100 +2,16 @@
 <html lang="ru">
 
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Стержневая система</title>
-  <link rel="stylesheet" href="styles.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>САПР-ПРАПОР</title>
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 </head>
 
 <body>
-  <header>
-    <h1>Стержневая система · MVP</h1>
-    <div class="row">
-      <button id="loadDemoBtn">Загрузить демо</button>
-      <button id="exportBtn">Скачать проект</button>
-      <label class="file">
-        <input type="file" id="importInput" accept="application/json" />
-        Импортировать
-      </label>
-    </div>
-  </header>
-
-  <main class="layout">
-    <section class="panel left">
-      <h2>Стержни</h2>
-      <form class="grid" id="rodForm">
-        <label>L, м
-          <input name="L" type="number" step="0.001" min="0.001" required value="1" />
-        </label>
-        <label>A, м²
-          <input name="A" type="number" step="0.000001" min="0.000001" required value="0.01" />
-        </label>
-        <label>E, Па
-          <input name="E" type="number" step="1" min="1" required value="200000000000" />
-        </label>
-        <label>[σ], Па
-          <input name="sigma" type="number" step="1" min="1" required value="200000000" />
-        </label>
-        <button type="submit">Добавить стержень</button>
-      </form>
-
-      <div id="rodsEmpty" class="muted">Пока пусто</div>
-      <div id="rodsList"></div>
-
-      <h2>Погонная нагрузка q</h2>
-      <form class="grid" id="qForm">
-        <label>Номер стержня
-          <input name="rodIndex" type="number" min="1" required value="1" />
-        </label>
-        <label>q, Н/м
-          <input name="value" type="number" step="0.001" required value="0" />
-        </label>
-        <button type="submit">Добавить q</button>
-      </form>
-      <div id="qList"></div>
-
-      <h2>Сосредоточенные силы F в узлах</h2>
-      <form class="grid" id="fForm">
-        <label>Номер узла
-          <input name="nodeIndex" type="number" min="1" required value="1" />
-        </label>
-        <label>Fx, Н
-          <input name="Fx" type="number" step="0.001" required value="0" />
-        </label>
-        <button type="submit">Добавить F</button>
-      </form>
-      <div id="fList"></div>
-
-      <h2>Граничные условия</h2>
-      <div class="grid">
-        <label><input type="checkbox" id="bcLeft" checked /> Заделка слева</label>
-        <label><input type="checkbox" id="bcRight" /> Заделка справа</label>
-      </div>
-
-      <h2>Диагностика</h2>
-      <div id="diag" class="diagnostics">—</div>
-    </section>
-
-    <section class="panel center">
-      <svg id="canvas" class="canvas" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 z" />
-          </marker>
-        </defs>
-      </svg>
-    </section>
-
-    <section class="panel right">
-      <h2>Справка</h2>
-      <p>Задайте последовательность прямолинейных стержней (L, A, E, [σ]); приложите нагрузки q по стержням и F в узлах;
-        задайте жёсткие опоры. Слева — формы и список, по центру — визуализация.</p>
-      <p>Файл проекта можно экспортировать в JSON и затем импортировать обратно.</p>
-    </section>
-  </main>
-
-  <script src="app.js"></script>
+    <div id="app"></div>
+    <script src="https://unpkg.com/konva@9/konva.min.js"></script>
+    <script type="module" src="/src/main.js"></script>
 </body>
 
 </html>

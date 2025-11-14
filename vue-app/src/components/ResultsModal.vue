@@ -166,7 +166,6 @@
                   <tr>
                     <th class="col-text">Index</th>
                     <th class="col-num">x (м)</th>
-                    <th class="col-num">x/L</th>
                     <th class="col-num">Nx (N)</th>
                     <th class="col-num">σx (Pa)</th>
                     <th class="col-num">ux (м)</th>
@@ -176,7 +175,6 @@
                   <tr v-for="(row, index) in memberTableData" :key="index" :class="{ 'even-row': index % 2 === 0 }">
                     <td class="col-text">{{ row.index }}</td>
                     <td class="col-num">{{ formatNumber(row.x) }}</td>
-                    <td class="col-num">{{ formatNumber(row.xOverL) }}</td>
                     <td class="col-num">{{ formatNumber(row.nx * 1000) }}</td>
                     <td class="col-num">{{ formatNumber(row.sigma * 1e6) }}</td>
                     <td class="col-num">{{ formatNumber(row.ux / 1000) }}</td>
